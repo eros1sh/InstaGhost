@@ -8,6 +8,12 @@ A browser-based tool that identifies and removes bot/spam followers from your In
 
 ---
 
+<p align="center">
+  <img src="ui.png" alt="InstaGhost Dashboard" width="420">
+</p>
+
+---
+
 ## Features
 
 ### Bot Detection & Scoring
@@ -127,18 +133,6 @@ A browser-based tool that identifies and removes bot/spam followers from your In
 | HTTP 401/403 | CSRF refresh + retry |
 
 Estimated throughput: **~80-100 removals/hour**
-
----
-
-## Screenshots
-
-The tool injects a floating panel directly into the Instagram page:
-
-- **Dashboard** — Live stats, progress bar, speed/ETA, control buttons
-- **Bot List** — Scrollable list with avatars, bot scores, status badges, checkboxes
-- **Log** — Timestamped event log with color-coded severity
-- **Whitelist** — Protected accounts management with import/export
-- **Settings** — All timing parameters configurable in real-time
 
 ---
 

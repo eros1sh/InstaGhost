@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════════════
-// bot_delete.js — Instagram Bot Follower Remover (UI Edition v3)
+// bot_delete.js — Instagram Bot Follower Remover (UI Edition v4 — Advanced Engine)
 // ════════════════════════════════════════════════════════════════════════════════
 (function () {
     'use strict';
@@ -8,12 +8,28 @@
 
     // ═══ CONFIG ═══
     const CONFIG = {
-        FETCH_DELAY_MIN: 1000, FETCH_DELAY_MAX: 2200, FETCH_PER_PAGE: 100, FETCH_MAX_RETRIES: 5,
-        REMOVE_DELAY_MIN: 26000, REMOVE_DELAY_MAX: 44000,
-        BATCH_SIZE: 18, BATCH_PAUSE_MIN: 180000, BATCH_PAUSE_MAX: 330000,
-        MEGA_BATCH_SIZE: 55, MEGA_PAUSE_MIN: 600000, MEGA_PAUSE_MAX: 900000,
-        RATE_LIMIT_INITIAL: 600000, RATE_LIMIT_MAX: 3600000, RATE_LIMIT_MULT: 2,
-        MAX_ERRORS: 8, ERROR_PAUSE: 900000, STORAGE_PREFIX: 'bd_',
+        // Fetch timing
+        FETCH_DELAY_MIN: 800, FETCH_DELAY_MAX: 2200,
+        FETCH_PER_PAGE: 12, FETCH_MAX_RETRIES: 5,
+        // Remove timing
+        REMOVE_DELAY_MIN: 22000, REMOVE_DELAY_MAX: 42000,
+        // Micro-batch (smaller batches = more human-like pattern)
+        BATCH_SIZE: 6, BATCH_PAUSE_MIN: 50000, BATCH_PAUSE_MAX: 110000,
+        // Mega batch
+        MEGA_BATCH_SIZE: 30, MEGA_PAUSE_MIN: 300000, MEGA_PAUSE_MAX: 540000,
+        // Rate limit backoff
+        RATE_LIMIT_INITIAL: 600000, RATE_LIMIT_MAX: 3600000, RATE_LIMIT_MULT: 1.8,
+        MAX_ERRORS: 6, ERROR_PAUSE: 900000,
+        // Adaptive throttle
+        RT_WINDOW: 10, RT_SLOW_THRESHOLD: 1.8, RT_SLOWDOWN_MAX: 3.0,
+        // Session health check interval (ms)
+        HEALTH_CHECK_INTERVAL: 300000,
+        // GraphQL API (faster follower fetching)
+        GQL_FOLLOWERS_HASH: '37479f2b8209594dde7facb0d904896a',
+        GQL_PER_PAGE: 50,
+        GQL_RETRY_AFTER: 600000, // retry GraphQL after 10min if it failed
+        // Storage
+        STORAGE_PREFIX: 'bd_',
     };
 
     // ═══ i18n ═══
@@ -28,6 +44,7 @@
             phaseSessionNotFound:'Oturum bulunamadı!', phaseDone:'Tamamlandı! {0} bot çıkarıldı',
             phaseStopped:'Durduruldu — {0} çıkarıldı, {1} kalan', phaseResumable:'Devam edilebilir — {0} sırada',
             phaseMegaPause:'Mega mola — {0}', phaseBatchPause:'Batch mola — {0}',
+            phaseAdaptive:'Adaptif yavaşlama aktif — {0}x',
             statFollowing:'Takip Edilen', statFollowers:'Taranan', statBots:'Bot Tespit', statRemoved:'Çıkarılan', statQueue:'Sırada', statFailed:'Başarısız',
             speed:'Hız', btnStart:'BAŞLAT', btnPause:'TARAMAYI DURAKLAT', btnResume:'TARAMAYA DEVAM', btnStop:'DURDUR', btnExport:'RAPOR İNDİR',
             searchPlaceholder:'Kullanıcı adı ara...', botCount:'{0} bot',
@@ -43,7 +60,7 @@
             settMegaBatch:'Mega Batch', settMegaSize:'Mega batch boyutu', settMegaPauseMin:'Mega mola min (ms)', settMegaPauseMax:'Mega mola max (ms)',
             btnSaveSettings:'AYARLARI KAYDET', btnResetAll:'TÜM VERİYİ SIFIRLA',
             confirmClose:'İşlem devam ediyor. Kapatılsın mı?', confirmReset:'TÜM veri silinecek. Emin misiniz?',
-            logReady:'Bot Temizleyici hazır.', logSessionNotFound:'Oturum bulunamadı',
+            logReady:'Bot Temizleyici v4 hazır.', logSessionNotFound:'Oturum bulunamadı',
             logResumeQueue:'Devam: {0} bot sırada', logPhase1:'Phase 1: Following çekiliyor',
             logFollowingCache:'Following cache: {0}', logPhase23:'Phase 2+3: Tarama + silme',
             logScanDone:'Tarama bitti: {0} bot', logDone:'Tamamlandı: {0} çıkarıldı, {1} başarısız',
@@ -60,6 +77,17 @@
             logStateLoaded:'Yüklendi: {0} çıkarılmış, {1} kalan', logError:'Hata: {0}',
             logWhitelisted:'@{0} beyaz listeye eklendi', logWlRemoved:'@{0} beyaz listeden çıkarıldı',
             logSkipWhitelist:'@{0} beyaz listede — atlandı', logSelectRemove:'{0} seçili bot çıkarılacak',
+            logAdaptiveSlowdown:'Adaptif yavaşlama: {0}x — gecikme artırıldı',
+            logSessionHealthOk:'Oturum sağlıklı',
+            logSessionHealthFail:'Oturum sağlıksız — bekleniyor',
+            logSoftRateLimit:'Soft rate limit algılandı — proaktif yavaşlama',
+            logHealthCheck:'Oturum kontrolü yapılıyor...',
+            logGqlStart:'GraphQL API ile tarama (50/sayfa)',
+            logGqlToRest:'GraphQL limit — REST API\'ye geçildi (12/sayfa)',
+            logRestToGql:'GraphQL API\'ye geri dönüldü (50/sayfa)',
+            logGqlTotal:'Toplam takipçi: {0}',
+            logApiMode:'API: {0} — {1}/sayfa',
+            logGqlError:'GraphQL hata: {0}',
             durMin:'dk', durHour:'sa',
         },
         en: {
@@ -72,6 +100,7 @@
             phaseSessionNotFound:'Session not found!', phaseDone:'Done! {0} bots removed',
             phaseStopped:'Stopped — {0} removed, {1} remaining', phaseResumable:'Resumable — {0} in queue',
             phaseMegaPause:'Mega break — {0}', phaseBatchPause:'Batch break — {0}',
+            phaseAdaptive:'Adaptive throttle active — {0}x',
             statFollowing:'Following', statFollowers:'Scanned', statBots:'Bots', statRemoved:'Removed', statQueue:'Queue', statFailed:'Failed',
             speed:'Speed', btnStart:'START', btnPause:'PAUSE SCAN', btnResume:'RESUME SCAN', btnStop:'STOP ALL', btnExport:'EXPORT REPORT',
             searchPlaceholder:'Search username...', botCount:'{0} bots',
@@ -87,7 +116,7 @@
             settMegaBatch:'Mega Batch', settMegaSize:'Mega size', settMegaPauseMin:'Mega min (ms)', settMegaPauseMax:'Mega max (ms)',
             btnSaveSettings:'SAVE SETTINGS', btnResetAll:'RESET ALL DATA',
             confirmClose:'Process running. Close?', confirmReset:'ALL data will be deleted. Sure?',
-            logReady:'Bot Cleaner ready.', logSessionNotFound:'Session not found',
+            logReady:'Bot Cleaner v4 ready.', logSessionNotFound:'Session not found',
             logResumeQueue:'Resuming: {0} in queue', logPhase1:'Phase 1: Fetching following',
             logFollowingCache:'Following cache: {0}', logPhase23:'Phase 2+3: Scan + remove',
             logScanDone:'Scan done: {0} bots', logDone:'Done: {0} removed, {1} failed',
@@ -104,6 +133,17 @@
             logStateLoaded:'Loaded: {0} removed, {1} left', logError:'Error: {0}',
             logWhitelisted:'@{0} whitelisted', logWlRemoved:'@{0} removed from whitelist',
             logSkipWhitelist:'@{0} whitelisted — skipped', logSelectRemove:'{0} selected bots to remove',
+            logAdaptiveSlowdown:'Adaptive slowdown: {0}x — delay increased',
+            logSessionHealthOk:'Session healthy',
+            logSessionHealthFail:'Session unhealthy — waiting',
+            logSoftRateLimit:'Soft rate limit detected — proactive slowdown',
+            logHealthCheck:'Running session health check...',
+            logGqlStart:'Scanning via GraphQL API (50/page)',
+            logGqlToRest:'GraphQL limited — switched to REST API (12/page)',
+            logRestToGql:'Switched back to GraphQL API (50/page)',
+            logGqlTotal:'Total followers: {0}',
+            logApiMode:'API: {0} — {1}/page',
+            logGqlError:'GraphQL error: {0}',
             durMin:'min', durHour:'h',
         },
     };
@@ -129,6 +169,24 @@
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
     const rdelay = (a, b) => sleep(rand(a, b));
+
+    // Box-Muller transform — Gaussian (normal) random distribution
+    function gaussRand(mean, stddev) {
+        let u1 = Math.random(), u2 = Math.random();
+        while (u1 === 0) u1 = Math.random();
+        const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+        return Math.max(0, Math.round(mean + z * stddev));
+    }
+
+    // Human-like delay: Gaussian distribution centered between min and max
+    // 95% of values fall within [min, max], with occasional outliers for realism
+    function humanDelay(min, max) {
+        const mean = (min + max) / 2;
+        const stddev = (max - min) / 4;
+        const delay = gaussRand(mean, stddev);
+        return Math.max(Math.round(min * 0.85), Math.min(Math.round(max * 1.25), delay));
+    }
+
     function fmtDur(ms) {
         if (ms < 1000) return ms + 'ms';
         const s = Math.floor(ms / 1000);
@@ -140,6 +198,46 @@
     function fmtTime(d) { return d.toLocaleTimeString(currentLang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
     function fmtNum(n) { return n.toLocaleString(currentLang === 'tr' ? 'tr-TR' : 'en-US'); }
     function escH(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    // ═══ RESPONSE TIME TRACKER (Adaptive Throttle) ═══
+    const responseTracker = {
+        times: [],
+        add(ms) {
+            this.times.push(ms);
+            if (this.times.length > CONFIG.RT_WINDOW) this.times.shift();
+        },
+        average() {
+            if (this.times.length === 0) return 0;
+            return this.times.reduce((a, b) => a + b, 0) / this.times.length;
+        },
+        isSlowing() {
+            if (this.times.length < 3) return false;
+            const avg = this.average();
+            const recent = this.times.slice(-2);
+            const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+            return recentAvg > avg * CONFIG.RT_SLOW_THRESHOLD;
+        },
+        getMultiplier() {
+            if (!this.isSlowing()) return 1.0;
+            const avg = this.average();
+            const recent = this.times.slice(-2);
+            const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+            return Math.min(CONFIG.RT_SLOWDOWN_MAX, recentAvg / avg);
+        },
+        reset() { this.times = []; },
+    };
+
+    // ═══ WEB SESSION ID ═══
+    function getWebSessionId() {
+        let sid = sessionStorage.getItem('bd-web-session-id');
+        if (!sid) {
+            const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            const seg = () => { let s = ''; for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)]; return s; };
+            sid = `${seg()}:${seg()}:${seg()}`;
+            sessionStorage.setItem('bd-web-session-id', sid);
+        }
+        return sid;
+    }
 
     // ═══ BOT SCORE ═══
     function calcScore(u) {
@@ -168,10 +266,72 @@
     function getCookie(n) { const m = document.cookie.split(';').find(c => c.trim().startsWith(n + '=')); return m ? m.split('=')[1].trim() : null; }
     const getCsrf = () => getCookie('csrftoken');
     const getUid = () => getCookie('ds_user_id');
-    function hdrs(csrf) { return { 'x-csrftoken': csrf, 'x-ig-app-id': '936619743392459', 'x-requested-with': 'XMLHttpRequest', 'x-ig-www-claim': sessionStorage.getItem('www-claim-v2') || '0', 'content-type': 'application/x-www-form-urlencoded' }; }
+
+    // Full header set matching real Instagram web client
+    function getHeaders(csrf) {
+        return {
+            'accept': '*/*',
+            'x-asbd-id': '359341',
+            'x-csrftoken': csrf,
+            'x-ig-app-id': '936619743392459',
+            'x-ig-www-claim': sessionStorage.getItem('www-claim-v2') || '0',
+            'x-requested-with': 'XMLHttpRequest',
+            'x-web-session-id': getWebSessionId(),
+        };
+    }
+    function postHeaders(csrf) {
+        return {
+            ...getHeaders(csrf),
+            'content-type': 'application/x-www-form-urlencoded',
+        };
+    }
+
     function saveClaim(r) { const c = r.headers.get('x-ig-set-www-claim'); if (c) sessionStorage.setItem('www-claim-v2', c); }
-    async function apiGet(url, csrf) { const r = await fetch(url, { method: 'GET', headers: hdrs(csrf), credentials: 'include' }); saveClaim(r); return r; }
-    async function apiPost(url, csrf) { const r = await fetch(url, { method: 'POST', headers: hdrs(csrf), credentials: 'include', body: '' }); saveClaim(r); return r; }
+
+    // API calls with response time tracking
+    async function apiGet(url, csrf) {
+        const start = performance.now();
+        const r = await fetch(url, {
+            method: 'GET',
+            headers: getHeaders(csrf),
+            credentials: 'include',
+            referrerPolicy: 'strict-origin-when-cross-origin',
+        });
+        responseTracker.add(performance.now() - start);
+        saveClaim(r);
+        return r;
+    }
+    async function apiPost(url, csrf) {
+        const start = performance.now();
+        const r = await fetch(url, {
+            method: 'POST',
+            headers: postHeaders(csrf),
+            credentials: 'include',
+            body: '',
+            referrerPolicy: 'strict-origin-when-cross-origin',
+        });
+        responseTracker.add(performance.now() - start);
+        saveClaim(r);
+        return r;
+    }
+
+    // ═══ SESSION HEALTH CHECK ═══
+    async function sessionHealthCheck(csrf) {
+        const uid = getUid();
+        if (!csrf || !uid) return false;
+        try {
+            const r = await fetch(`/api/v1/users/${uid}/info/`, {
+                method: 'GET',
+                headers: getHeaders(csrf),
+                credentials: 'include',
+                referrerPolicy: 'strict-origin-when-cross-origin',
+            });
+            saveClaim(r);
+            return r.ok;
+        } catch {
+            return false;
+        }
+    }
 
     // ═══ CSS ═══
     function injectCSS() {
@@ -191,7 +351,7 @@
 .bd-body{flex:1;overflow:hidden;display:flex;flex-direction:column}
 .bd-content{flex:1;overflow-y:auto;padding:14px;display:none}.bd-content.active{display:block}.bd-content::-webkit-scrollbar{width:4px}.bd-content::-webkit-scrollbar-thumb{background:#2a2a4a;border-radius:2px}
 .bd-phase{text-align:center;padding:8px;margin-bottom:10px;background:#1a1a3a;border-radius:8px;font-weight:600;font-size:12px}
-.bd-phase.running{background:#1a2a1a;color:#00e676}.bd-phase.paused{background:#2a2a1a;color:#ffab00}.bd-phase.error{background:#2a1a1a;color:#ff1744}
+.bd-phase.running{background:#1a2a1a;color:#00e676}.bd-phase.paused{background:#2a2a1a;color:#ffab00}.bd-phase.error{background:#2a1a1a;color:#ff1744}.bd-phase.adaptive{background:#1a1a2a;color:#bb86fc}
 .bd-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px}
 .bd-stat{background:#1a1a3a;border-radius:8px;padding:8px;text-align:center}
 .bd-stat-val{font-size:18px;font-weight:700;display:block;margin-bottom:1px}.bd-stat-lbl{font-size:9px;color:#888;text-transform:uppercase;letter-spacing:.4px}
@@ -469,13 +629,11 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
     function addWhitelist() {
         let name = (els.wlInput.value || '').trim().replace(/^@/, '');
         if (!name) return;
-        // Check if bot exists in our list
         const bot = state.botsFound.find(b => b.username.toLowerCase() === name.toLowerCase());
         const id = bot ? bot.id : 'wl_' + name.toLowerCase();
         if (state.whitelist.has(id)) return;
         state.whitelist.add(id);
         state.whitelistUsers.push({ id, username: bot ? bot.username : name, full_name: bot ? bot.full_name : '', pic: bot ? bot.pic : '' });
-        // Remove from queue if present
         if (queueIds.has(id)) {
             state.removalQueue = state.removalQueue.filter(b => b.id !== id);
             queueIds.delete(id);
@@ -541,11 +699,9 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
     // ═══ SAVED STATE ═══
     function loadSavedState() {
         currentLang = store.get('lang', 'tr'); applyLang();
-        // Whitelist
         const wl = store.get('whitelist', []);
         wl.forEach(u => { state.whitelist.add(u.id); state.whitelistUsers.push(u); });
         renderWhitelist();
-        // Main state
         const saved = store.get('state');
         if (!saved) return;
         state.followingList = saved.followingList || [];
@@ -562,7 +718,6 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
             state.removalQueue = state.botsFound.filter(b => !done.has(b.id));
             state.removalQueue.forEach(u => queueIds.add(u.id));
         }
-        // Recalc scores
         state.botsFound.forEach(b => { b.score = calcScore(b); });
         state.botsFound.sort((a, b) => (b.score || 0) - (a.score || 0));
         ui_update(); renderBotList();
@@ -594,12 +749,13 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
         state.fetchComplete = false; state.sessionRemoved = 0;
         state.whitelist.clear(); state.whitelistUsers = []; state.selectedBots.clear();
         removedIds.clear(); failedIds.clear(); queueIds.clear();
+        responseTracker.reset();
         els.logbox.innerHTML = ''; state.logs = [];
         setPhase(t('phaseReady')); ui_update(); renderBotList(); renderWhitelist(); setButtons('idle');
         addLog(t('logResetDone'), 'warn');
     }
     function exportReport() {
-        const data = { following: state.followingList.length, scanned: state.followersScanned, bots: state.botsFound.length, removed: state.removedList, failed: state.failedList, remaining: state.removalQueue.length, at: new Date().toISOString() };
+        const data = { version: 'v4', engine: 'advanced', following: state.followingList.length, scanned: state.followersScanned, bots: state.botsFound.length, removed: state.removedList, failed: state.failedList, remaining: state.removalQueue.length, at: new Date().toISOString() };
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
         a.download = `bot_report_${new Date().toISOString().slice(0, 10)}.json`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
@@ -622,6 +778,7 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
         const csrf = getCsrf(), uid = getUid();
         if (!csrf || !uid) { setPhase(t('phaseSessionNotFound'), 'error'); addLog(t('logSessionNotFound'), 'err'); return; }
         state.running = true; state.scanPaused = false; state.startTime = Date.now(); state.sessionRemoved = 0;
+        responseTracker.reset();
         setButtons('running');
 
         if (state.removalQueue.length > 0 && state.fetchComplete) {
@@ -674,7 +831,6 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
         saveState(); setButtons('idle');
     }
 
-    // Scan waits when paused, remover does NOT
     async function waitScanPause() { while (state.scanPaused && state.running) await sleep(500); }
 
     // ═══ REMOVE SELECTED ONLY ═══
@@ -682,14 +838,13 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
         if (state.selectedBots.size === 0) return;
         const csrf = getCsrf();
         if (!csrf) { addLog(t('logCsrfError'), 'err'); return; }
-        // Move selected to front of queue
         const selList = state.botsFound.filter(b => state.selectedBots.has(b.id) && !removedIds.has(b.id) && !failedIds.has(b.id) && !state.whitelist.has(b.id));
         addLog(t('logSelectRemove', selList.length), 'info');
-        // Replace queue with only selected
         state.removalQueue = selList;
         queueIds.clear(); selList.forEach(b => queueIds.add(b.id));
         state.fetchComplete = true;
         state.running = true; state.scanPaused = false; state.startTime = Date.now(); state.sessionRemoved = 0;
+        responseTracker.reset();
         setButtons('running');
         setPhase(t('phaseRemoving'), 'running');
         ui_update(); renderBotList();
@@ -706,79 +861,274 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
         let cursor = null, hasMore = true, retries = 0;
         while (hasMore && state.running) {
             await waitScanPause(); if (!state.running) return false;
-            const url = `/api/v1/friendships/${uid}/following/?count=${CONFIG.FETCH_PER_PAGE}` + (cursor ? `&max_id=${cursor}` : '');
+            let url = `/api/v1/friendships/${uid}/following/?count=${CONFIG.FETCH_PER_PAGE}&search_surface=follow_list_page`;
+            if (cursor) url += `&max_id=${cursor}`;
             try {
                 const r = await apiGet(url, csrf);
                 if (r.status === 429) { addLog(t('logRateLimit', 'following'), 'warn'); await handleBackoff(); continue; }
                 if (r.status === 401 || r.status === 403) { setPhase(t('phaseSessionError'), 'error'); addLog(t('logSessionError'), 'err'); state.running = false; setButtons('idle'); return false; }
                 if (!r.ok) { retries++; if (retries > CONFIG.FETCH_MAX_RETRIES) { addLog(t('logFetchFail', 'Following'), 'err'); state.running = false; setButtons('idle'); return false; } addLog(t('logFetchRetry', 'Following', r.status, retries, CONFIG.FETCH_MAX_RETRIES), 'warn'); await sleep(30000); continue; }
-                const data = await r.json(); retries = 0;
+                const data = await r.json(); retries = 0; resetBackoff();
                 if (data.users) for (const u of data.users) { const id = String(u.pk || u.pk_id); if (!state.followingSet.has(id)) { state.followingSet.add(id); state.followingList.push({ id, username: u.username }); } }
                 cursor = data.next_max_id || null; hasMore = !!cursor;
                 els.sFollowing.textContent = fmtNum(state.followingList.length);
                 addLog(t('logFetchProgress', 'Following', state.followingList.length), 'dim');
-                if (hasMore) await rdelay(CONFIG.FETCH_DELAY_MIN, CONFIG.FETCH_DELAY_MAX);
+                if (hasMore) {
+                    // Gaussian delay with adaptive multiplier
+                    const mult = responseTracker.getMultiplier();
+                    const delay = Math.round(humanDelay(CONFIG.FETCH_DELAY_MIN, CONFIG.FETCH_DELAY_MAX) * mult);
+                    if (mult > 1.0) addLog(t('logAdaptiveSlowdown', mult.toFixed(1)), 'warn');
+                    await sleep(delay);
+                }
             } catch (e) { addLog(t('logError', e.message), 'err'); retries++; if (retries > CONFIG.FETCH_MAX_RETRIES) { state.running = false; return false; } await sleep(30000); }
         }
         addLog(t('logFetchDone', 'Following', state.followingList.length), 'ok'); saveState(); return true;
     }
 
-    // ═══ PHASE 2: FETCH FOLLOWERS + QUEUE ═══
+    // ═══ PHASE 2: FETCH FOLLOWERS + QUEUE (Dual API: GraphQL primary → REST fallback) ═══
+
+    // Normalize user data from either API into internal format
+    function normalizeUser(u, source) {
+        if (source === 'gql') {
+            return {
+                id: String(u.id), username: u.username,
+                full_name: u.full_name || '', pic: u.profile_pic_url || '',
+                is_private: u.is_private || false, is_verified: u.is_verified || false,
+                no_pic: u.has_anonymous_profile_picture || false,
+            };
+        }
+        return {
+            id: String(u.pk || u.pk_id), username: u.username,
+            full_name: u.full_name || '', pic: u.profile_pic_url || '',
+            is_private: u.is_private || false, is_verified: u.is_verified || false,
+            no_pic: u.has_anonymous_profile_picture || false,
+        };
+    }
+
+    // Process fetched users into bot queue (shared by both APIs)
+    function processFollowerBatch(users) {
+        let newBots = 0;
+        for (const u of users) {
+            state.followersScanned++;
+            if (!state.followingSet.has(u.id) && !state.whitelist.has(u.id)) {
+                if (!removedIds.has(u.id) && !failedIds.has(u.id) && !queueIds.has(u.id)) {
+                    const bot = { ...u };
+                    bot.score = calcScore(bot);
+                    state.botsFound.push(bot);
+                    state.removalQueue.push(bot); queueIds.add(u.id);
+                    newBots++;
+                }
+            }
+        }
+        if (newBots > 0) state.removalQueue.sort((a, b) => (b.score || 0) - (a.score || 0));
+        return newBots;
+    }
+
     async function fetchFollowersAndQueue(uid, csrf) {
-        let cursor = store.get('followers_cursor', null), hasMore = true, retries = 0;
+        let useGQL = true;
+        let gqlCursor = store.get('gql_cursor', null);
+        let restCursor = store.get('followers_cursor', null);
+        let gqlDisabledAt = 0;
+        let hasMore = true, retries = 0;
+        let totalReported = false;
+
+        addLog(t('logGqlStart'), 'info');
+
         while (hasMore && state.running) {
             await waitScanPause(); if (!state.running) return;
-            const url = `/api/v1/friendships/${uid}/followers/?count=${CONFIG.FETCH_PER_PAGE}` + (cursor ? `&max_id=${cursor}` : '');
-            try {
-                const r = await apiGet(url, csrf);
-                if (r.status === 429) { addLog(t('logRateLimit', 'followers'), 'warn'); await handleBackoff(); continue; }
-                if (r.status === 401 || r.status === 403) { addLog(t('logSessionError'), 'err'); await sleep(5000); csrf = getCsrf(); if (!csrf) { state.running = false; return; } continue; }
-                if (!r.ok) { retries++; if (retries > CONFIG.FETCH_MAX_RETRIES) { addLog(t('logFetchFail', 'Followers'), 'err'); return; } await sleep(30000); continue; }
-                const data = await r.json(); retries = 0; resetBackoff();
-                if (data.users) for (const u of data.users) {
-                    const id = String(u.pk || u.pk_id);
-                    state.followersScanned++;
-                    if (!state.followingSet.has(id) && !state.whitelist.has(id)) {
-                        if (!removedIds.has(id) && !failedIds.has(id) && !queueIds.has(id)) {
-                            const noPic = u.has_anonymous_profile_picture || false;
-                            const bot = { id, username: u.username, full_name: u.full_name || '', pic: u.profile_pic_url || '', is_private: u.is_private || false, is_verified: u.is_verified || false, no_pic: noPic };
-                            bot.score = calcScore(bot);
-                            state.botsFound.push(bot);
-                            state.removalQueue.push(bot); queueIds.add(id);
-                        }
+
+            // Try switching back to GraphQL after cooldown
+            if (!useGQL && gqlDisabledAt > 0 && Date.now() - gqlDisabledAt > CONFIG.GQL_RETRY_AFTER) {
+                useGQL = true; gqlDisabledAt = 0;
+                addLog(t('logRestToGql'), 'info');
+            }
+
+            let fetchedUsers = [];
+
+            if (useGQL) {
+                // ── GraphQL API (50/page — primary) ──
+                const vars = { id: uid, first: CONFIG.GQL_PER_PAGE };
+                if (gqlCursor) vars.after = gqlCursor;
+                const url = `/graphql/query/?query_hash=${CONFIG.GQL_FOLLOWERS_HASH}&variables=${encodeURIComponent(JSON.stringify(vars))}`;
+
+                try {
+                    const r = await apiGet(url, csrf);
+
+                    if (r.status === 429) {
+                        // GraphQL rate limited — switch to REST (different rate limit bucket)
+                        addLog(t('logGqlToRest'), 'warn');
+                        useGQL = false; gqlDisabledAt = Date.now();
+                        retries = 0;
+                        continue;
                     }
+                    if (r.status === 401 || r.status === 403) {
+                        addLog(t('logSessionError'), 'err');
+                        await sleep(5000); csrf = getCsrf();
+                        if (!csrf) { state.running = false; return; }
+                        continue;
+                    }
+                    if (!r.ok) {
+                        retries++;
+                        if (retries > 2) {
+                            addLog(t('logGqlToRest'), 'warn');
+                            useGQL = false; gqlDisabledAt = Date.now(); retries = 0;
+                            continue;
+                        }
+                        addLog(t('logGqlError', r.status), 'warn');
+                        await sleep(10000);
+                        continue;
+                    }
+
+                    const data = await r.json();
+                    const edge = data?.data?.user?.edge_followed_by;
+
+                    if (!edge) {
+                        addLog(t('logGqlToRest'), 'warn');
+                        useGQL = false; gqlDisabledAt = Date.now();
+                        continue;
+                    }
+
+                    retries = 0; resetBackoff();
+
+                    // Report total follower count (once)
+                    if (!totalReported && edge.count) {
+                        addLog(t('logGqlTotal', fmtNum(edge.count)), 'info');
+                        totalReported = true;
+                    }
+
+                    fetchedUsers = (edge.edges || []).map(e => normalizeUser(e.node, 'gql'));
+                    hasMore = edge.page_info?.has_next_page || false;
+                    gqlCursor = edge.page_info?.end_cursor || null;
+                    store.set('gql_cursor', gqlCursor);
+
+                } catch (e) {
+                    addLog(t('logGqlError', e.message), 'warn');
+                    useGQL = false; gqlDisabledAt = Date.now();
+                    continue;
                 }
-                // Sort queue by score (highest first)
-                state.removalQueue.sort((a, b) => (b.score || 0) - (a.score || 0));
-                cursor = data.next_max_id || null; hasMore = !!cursor;
-                store.set('followers_cursor', cursor); ui_update();
+            } else {
+                // ── REST API fallback (12/page) ──
+                let url = `/api/v1/friendships/${uid}/followers/?count=${CONFIG.FETCH_PER_PAGE}&search_surface=follow_list_page`;
+                if (restCursor) url += `&max_id=${restCursor}`;
+
+                try {
+                    const r = await apiGet(url, csrf);
+
+                    if (r.status === 429) {
+                        addLog(t('logRateLimit', 'REST'), 'warn');
+                        await handleBackoff();
+                        continue;
+                    }
+                    if (r.status === 401 || r.status === 403) {
+                        addLog(t('logSessionError'), 'err');
+                        await sleep(5000); csrf = getCsrf();
+                        if (!csrf) { state.running = false; return; }
+                        continue;
+                    }
+                    if (!r.ok) {
+                        retries++;
+                        if (retries > CONFIG.FETCH_MAX_RETRIES) {
+                            addLog(t('logFetchFail', 'Followers'), 'err');
+                            return;
+                        }
+                        await sleep(30000);
+                        continue;
+                    }
+
+                    const data = await r.json();
+                    retries = 0; resetBackoff();
+
+                    fetchedUsers = (data.users || []).map(u => normalizeUser(u, 'rest'));
+                    hasMore = !!(data.next_max_id);
+                    restCursor = data.next_max_id || null;
+                    store.set('followers_cursor', restCursor);
+
+                } catch (e) {
+                    addLog(t('logError', e.message), 'err');
+                    retries++;
+                    if (retries > CONFIG.FETCH_MAX_RETRIES) return;
+                    await sleep(30000);
+                    continue;
+                }
+            }
+
+            // ── Process fetched users (shared logic) ──
+            if (fetchedUsers.length > 0) {
+                processFollowerBatch(fetchedUsers);
+                ui_update();
                 if (state.followersScanned % 500 === 0) { saveState(); renderBotList(); }
-                addLog(t('logScanProgress', fmtNum(state.followersScanned), state.botsFound.length), 'dim');
-                if (hasMore) await rdelay(CONFIG.FETCH_DELAY_MIN, CONFIG.FETCH_DELAY_MAX);
-            } catch (e) { addLog(t('logError', e.message), 'err'); retries++; if (retries > CONFIG.FETCH_MAX_RETRIES) return; await sleep(30000); }
+                const apiLabel = useGQL ? 'GQL' : 'REST';
+                addLog(t('logScanProgress', fmtNum(state.followersScanned), state.botsFound.length) + ` [${apiLabel}]`, 'dim');
+            }
+
+            if (hasMore) {
+                const mult = responseTracker.getMultiplier();
+                const delay = Math.round(humanDelay(CONFIG.FETCH_DELAY_MIN, CONFIG.FETCH_DELAY_MAX) * mult);
+                if (mult > 1.0) addLog(t('logAdaptiveSlowdown', mult.toFixed(1)), 'warn');
+                await sleep(delay);
+            }
         }
-        // Final sort
+
         state.botsFound.sort((a, b) => (b.score || 0) - (a.score || 0));
         renderBotList();
     }
 
-    // ═══ PHASE 3: REMOVER (does NOT pause when scan paused) ═══
+    // ═══ PHASE 3: REMOVER (Advanced Engine — micro-batch + adaptive + health check) ═══
     async function runRemover(csrf) {
         let batch = 0, mega = 0;
+        let lastHealthCheck = Date.now();
+        let adaptiveNotified = false;
+
         while (state.running) {
-            // Remover does NOT wait for scanPaused — only checks state.running
             if (!state.running) break;
             if (state.removalQueue.length === 0) { if (state.fetchComplete) break; await sleep(2000); continue; }
+
+            // Session health check every HEALTH_CHECK_INTERVAL
+            if (Date.now() - lastHealthCheck > CONFIG.HEALTH_CHECK_INTERVAL) {
+                addLog(t('logHealthCheck'), 'dim');
+                const fresh = getCsrf();
+                if (fresh && await sessionHealthCheck(fresh)) {
+                    addLog(t('logSessionHealthOk'), 'ok');
+                } else {
+                    addLog(t('logSessionHealthFail'), 'warn');
+                    setPhase(t('phaseRateLimit'), 'paused');
+                    await sleep(60000);
+                    lastHealthCheck = Date.now();
+                    continue;
+                }
+                lastHealthCheck = Date.now();
+            }
+
             const bot = state.removalQueue[0];
+
             // Skip whitelisted
             if (state.whitelist.has(bot.id)) { state.removalQueue.shift(); queueIds.delete(bot.id); addLog(t('logSkipWhitelist', bot.username), 'dim'); continue; }
+
             const fresh = getCsrf();
             if (!fresh) { addLog(t('logCsrfError'), 'err'); setPhase(t('phaseSessionError'), 'error'); state.running = false; setButtons('idle'); break; }
             csrf = fresh;
+
             try {
                 const r = await apiPost(`/api/v1/friendships/remove_follower/${bot.id}/`, csrf);
-                if (r.status === 429) { addLog(t('logRateLimitUser', bot.username), 'warn'); setPhase(t('phaseRateLimit'), 'paused'); await handleBackoff(); if (state.running) setPhase(state.scanPaused ? t('phasePaused') : t('phaseResuming'), state.scanPaused ? 'paused' : 'running'); continue; }
+
+                // Check adaptive throttle AFTER the request
+                const rtMult = responseTracker.getMultiplier();
+                if (rtMult > 1.0 && !adaptiveNotified) {
+                    addLog(t('logSoftRateLimit'), 'warn');
+                    adaptiveNotified = true;
+                } else if (rtMult <= 1.0) {
+                    adaptiveNotified = false;
+                }
+
+                if (r.status === 429) {
+                    addLog(t('logRateLimitUser', bot.username), 'warn');
+                    setPhase(t('phaseRateLimit'), 'paused');
+                    await handleBackoff();
+                    if (state.running) setPhase(state.scanPaused ? t('phasePaused') : t('phaseResuming'), state.scanPaused ? 'paused' : 'running');
+                    continue;
+                }
                 if (r.status === 401 || r.status === 403) { addLog(t('logSessionRefresh'), 'warn'); await sleep(5000); continue; }
+
                 if (r.ok || r.status === 400) {
                     state.removalQueue.shift(); queueIds.delete(bot.id); removedIds.add(bot.id);
                     state.removedList.push({ id: bot.id, username: bot.username, at: new Date().toISOString() });
@@ -786,17 +1136,31 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
                     addLog(t('logRemoved', bot.username, state.removedList.length, state.removalQueue.length), 'ok');
                     ui_update();
                     if (state.sessionRemoved % 10 === 0) { saveState(); renderBotList(); }
+
+                    // Micro-batch pause logic
                     if (mega >= CONFIG.MEGA_BATCH_SIZE) {
-                        const p = rand(CONFIG.MEGA_PAUSE_MIN, CONFIG.MEGA_PAUSE_MAX);
+                        const p = humanDelay(CONFIG.MEGA_PAUSE_MIN, CONFIG.MEGA_PAUSE_MAX);
                         addLog(t('logMegaPause', mega, fmtDur(p)), 'warn');
                         setPhase(t('phaseMegaPause', fmtDur(p)), 'paused'); await sleep(p); mega = 0; batch = 0;
+                        responseTracker.reset(); adaptiveNotified = false;
                         if (state.running) setPhase(state.scanPaused ? t('phasePaused') : t('phaseResuming'), state.scanPaused ? 'paused' : 'running');
                     } else if (batch >= CONFIG.BATCH_SIZE) {
-                        const p = rand(CONFIG.BATCH_PAUSE_MIN, CONFIG.BATCH_PAUSE_MAX);
+                        const p = humanDelay(CONFIG.BATCH_PAUSE_MIN, CONFIG.BATCH_PAUSE_MAX);
                         addLog(t('logBatchPause', batch, fmtDur(p)), 'info');
                         setPhase(t('phaseBatchPause', fmtDur(p)), 'paused'); await sleep(p); batch = 0;
                         if (state.running) setPhase(state.scanPaused ? t('phasePaused') : t('phaseResuming'), state.scanPaused ? 'paused' : 'running');
-                    } else await rdelay(CONFIG.REMOVE_DELAY_MIN, CONFIG.REMOVE_DELAY_MAX);
+                    } else {
+                        // Gaussian delay with adaptive multiplier
+                        let delay = humanDelay(CONFIG.REMOVE_DELAY_MIN, CONFIG.REMOVE_DELAY_MAX);
+                        delay = Math.round(delay * rtMult);
+                        if (rtMult > 1.0) {
+                            setPhase(t('phaseAdaptive', rtMult.toFixed(1)), 'adaptive');
+                        }
+                        await sleep(delay);
+                        if (state.running && rtMult <= 1.0) {
+                            setPhase(state.scanPaused ? t('phasePaused') : (state.fetchComplete ? t('phaseRemoving') : t('phaseScanning')), state.scanPaused ? 'paused' : 'running');
+                        }
+                    }
                 } else {
                     state.removalQueue.shift(); queueIds.delete(bot.id); failedIds.add(bot.id);
                     state.failedList.push({ id: bot.id, username: bot.username, status: r.status });
@@ -810,9 +1174,11 @@ ${noPicIcon}<img class="bd-bitem-avatar" src="${b.pic || ''}" onerror="this.styl
         saveState(); renderBotList();
     }
 
-    // ═══ BACKOFF ═══
+    // ═══ BACKOFF (with jitter for unpredictability) ═══
     async function handleBackoff() {
-        const w = state.currentBackoff;
+        // Add ±20% jitter to backoff time so it's not perfectly predictable
+        const jitter = state.currentBackoff * (0.8 + Math.random() * 0.4);
+        const w = Math.round(jitter);
         addLog(t('logBackoff', '', fmtDur(w)), 'warn');
         await sleep(w);
         state.currentBackoff = Math.min(state.currentBackoff * CONFIG.RATE_LIMIT_MULT, CONFIG.RATE_LIMIT_MAX);
